@@ -272,19 +272,87 @@ def generate_openai_summary(item: DigestItem, model: str, api_key: str) -> Tuple
     return fallback_summary(item)
 
 
+def score_to_stars(score: float) -> str:
+    level = max(1, min(5, round(score)))
+    return "★" * level + "☆" * (5 - level)
+
+
+def make_three_line_summary(item: DigestItem) -> List[str]:
+    base = item.summary or item.plain_description or item.title
+    text = re.sub(r"\s+", " ", base).strip()
+    if not text:
+        text = item.title
+    chunks = []
+    step = max(28, min(48, len(text) // 3 if len(text) > 0 else 28))
+    for i in range(0, len(text), step):
+        chunks.append(text[i:i+step].strip())
+        if len(chunks) == 3:
+            break
+    while len(chunks) < 3:
+        if len(chunks) == 0:
+            chunks.append(item.title[:48])
+        elif len(chunks) == 1:
+            chunks.append(item.extra.get("easy", "핵심 내용을 쉽게 확인할 수 있습니다.")[:48])
+        else:
+            chunks.append(item.extra.get("why", item.importance_reason)[:48])
+    return chunks
+
+
+def make_100_char_summary(item: DigestItem) -> str:
+    text = f"{item.summary} {item.extra.get('easy','')} {item.extra.get('why','')}"
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        text = item.title
+    return text[:100]
+
+
+def make_study_topics(item: DigestItem) -> List[str]:
+    topics = []
+    if item.keywords:
+        topics.extend(item.keywords[:3])
+    if "리뷰" in item.category:
+        topics.append("리뷰 논문의 방법론과 결론 비교")
+    if item.category == "기사":
+        topics.append("산업 적용 사례와 시장 동향")
+    if not topics:
+        topics = [
+            f"{item.source} 관련 후속 연구",
+            "실험 조건 및 공정 변수 비교",
+            "지질/에멀전 안정성 평가 지표",
+        ]
+    while len(topics) < 3:
+        topics.append("관련 핵심 개념 정리")
+    return topics[:3]
+
+
 def format_item(idx: int, item: DigestItem) -> str:
-    date_str = item.date.astimezone(dt.timezone(dt.timedelta(hours=9))).strftime("%Y-%m-%d %H:%M KST")
-    kws = ", ".join(sorted(set(item.keywords))) if item.keywords else "(없음)"
+    date_str = item.date.astimezone(dt.timezone(dt.timedelta(hours=9))).strftime("%Y-%m-%d")
+    three_lines = make_three_line_summary(item)
+    short_summary = make_100_char_summary(item)
+    study_topics = make_study_topics(item)
     return (
-        f"[{idx}] {item.title}\n"
-        f"구분: {item.category}\n"
-        f"출처: {item.source}\n"
-        f"날짜: {date_str}\n"
-        f"한 줄 요약: {item.summary}\n"
-        f"쉽게 말하면: {item.extra.get('easy', '')}\n"
-        f"왜 중요한가: {item.extra.get('why', '')}\n"
-        f"관련 키워드: {kws}\n"
-        f"링크: {item.link}\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"[{idx}] [{item.category}]\n\n"
+        "0. 중요도\n"
+        f"{score_to_stars(item.score)}\n\n"
+        "1. 논문명 또는 기사 제목\n"
+        f"🧪 {item.title}\n\n"
+        "2. 해당 학회 및 기사 낸 곳\n"
+        f"🏛 {item.source}\n"
+        f"📅 {date_str}\n\n"
+        "3. 3줄 요약\n"
+        f"• {three_lines[0]}\n"
+        f"• {three_lines[1]}\n"
+        f"• {three_lines[2]}\n\n"
+        "4. 100자 요약\n"
+        f"{short_summary}\n\n"
+        "5. 관련 내용 엮어서 추가로 공부하면 좋을 것\n"
+        f"• {study_topics[0]}\n"
+        f"• {study_topics[1]}\n"
+        f"• {study_topics[2]}\n\n"
+        "🔗 링크\n"
+        f"{item.link}\n"
+        "━━━━━━━━━━━━━━━━━━\n"
     )
 
 
@@ -317,8 +385,6 @@ def run(dry_run: bool) -> int:
     topics, priority = load_topics("config/topics.json")
     lookback_hours = int(os.getenv("LOOKBACK_HOURS", "24"))
     max_items = int(os.getenv("MAX_ITEMS", "12"))
-    openai_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-    openai_key = os.getenv("OPENAI_API_KEY", "")
 
     logging.info("Collecting items for lookback=%sh", lookback_hours)
     all_items = []
@@ -337,18 +403,29 @@ def run(dry_run: bool) -> int:
     ranked = sorted(unique, key=lambda x: x.score, reverse=True)[:max_items]
 
     for it in ranked:
-        if openai_key:
-            one_line, easy, why = generate_openai_summary(it, openai_model, openai_key)
-        else:
-            one_line, easy, why = fallback_summary(it)
+        one_line, easy, why = fallback_summary(it)
         it.summary = one_line
         it.extra["easy"] = easy
         it.extra["why"] = why
 
+    keyword_counts: Dict[str, int] = {}
+    for it in ranked:
+        for kw in it.keywords:
+            keyword_counts[kw] = keyword_counts.get(kw, 0) + 1
+    top_keywords = [k for k, _ in sorted(keyword_counts.items(), key=lambda x: (-x[1], x[0]))[:5]]
+    if len(top_keywords) < 3:
+        for topic in topics:
+            if topic not in top_keywords:
+                top_keywords.append(topic)
+            if len(top_keywords) >= 3:
+                break
+
+    now_kst = dt.datetime.now(dt.timezone(dt.timedelta(hours=9)))
     header = (
-        "Food Emulsion & Lipid Processing Daily Digest\n"
-        f"생성시각(UTC): {dt.datetime.now(dt.timezone.utc).strftime('%Y-%m-%d %H:%M')}\n"
-        f"대상기간: 최근 {lookback_hours}시간\n\n"
+        "🧪 Food Emulsion & Lipid Processing Daily Digest\n"
+        f"📅 {now_kst.strftime('%Y-%m-%d')} | Morning Brief\n"
+        f"📦 오늘 브리핑: {len(ranked)}건\n"
+        f"🔎 주요 키워드: {', '.join(top_keywords) if top_keywords else '(없음)'}\n\n"
     )
     body = "\n".join(format_item(i + 1, it) for i, it in enumerate(ranked))
     final_text = header + body if ranked else header + "수집된 항목이 없습니다."
