@@ -266,41 +266,43 @@ def item_icon(category: str) -> str:
 
 
 def score_to_stars(score: float) -> str:
-    if score >= 11:
-        n = 5
-    elif score >= 8.5:
-        n = 4
-    elif score >= 6.0:
-        n = 3
-    elif score >= 3.5:
-        n = 2
-    else:
-        n = 1
-    return "★" * n + "☆" * (5 - n)
+    if score >= 8:
+        return "★★★★★"
+    if score >= 6:
+        return "★★★★☆"
+    if score >= 4:
+        return "★★★☆☆"
+    if score >= 2:
+        return "★★☆☆☆"
+    return "★☆☆☆☆"
 
 
-def to_100char_summary(text: str) -> str:
+def make_three_line_summary(item: DigestItem) -> List[str]:
+    kw_text = ", ".join(item.keywords[:2]) if item.keywords else "식품 유화·유지가공"
+    source_text = item.source if item.source else "주요 학술/산업 출처"
+    title_short = re.sub(r"\s+", " ", item.title).strip()[:58]
+    line1 = f"이 [{item_type_label(item.category)}] 자료는 {kw_text} 관련 최근 동향을 다룹니다."
+    line2 = f"핵심 포인트: {title_short}"
+    line3 = f"{source_text} 기반 정보로 현장 적용 아이디어를 빠르게 확인할 수 있습니다."
+    return [line1, line2, line3]
+
+
+def make_100_char_summary(item: DigestItem) -> str:
+    kw_text = ", ".join(item.keywords[:2]) if item.keywords else "식품 유화와 유지가공"
+    text = f"{item_type_label(item.category)} 한 건으로 {kw_text}의 최신 흐름을 쉽게 파악하고 제품 안정화·품질 개선 방향을 잡는 데 도움됩니다."
     clean = re.sub(r"\s+", " ", text).strip()
     if len(clean) <= 110:
         return clean
     return clean[:107].rstrip() + "..."
 
 
-def make_three_bullets(item: DigestItem) -> List[str]:
-    type_text = item_type_label(item.category)
-    bullet1 = f"최근 공개된 [{type_text}] 자료로, 핵심 주제는 {', '.join(item.keywords[:2]) if item.keywords else '식품 유화·유지가공'}입니다."
-    bullet2 = f"핵심 내용: {(item.summary or item.plain_description or item.title).strip().replace(chr(10), ' ')[:60]}"
-    bullet3 = f"현업 관점에서 {item.importance_reason[:50]}"
-    return [bullet1, bullet2, bullet3]
-
-
-def recommend_study_topics(item: DigestItem) -> List[str]:
+def make_study_topics(item: DigestItem) -> List[str]:
     text = f"{item.title} {item.plain_description}".lower()
     pool: List[str] = []
     if "pickering" in text:
-        pool.append("Pickering emulsion의 계면 안정화 원리")
+        pool.append("Pickering emulsion의 안정화 원리")
     if "oleogel" in text:
-        pool.append("oleogel과 saturated fat replacement의 연결")
+        pool.append("oleogel과 saturated fat replacement의 관계")
     if "oxid" in text:
         pool.append("lipid oxidation 억제 전략(항산화제/포장/공정)")
     if "protein" in text or "plant" in text:
@@ -313,11 +315,13 @@ def recommend_study_topics(item: DigestItem) -> List[str]:
         pool.append("식용유 정제 공정(탈검·탈취·품질지표) 이해")
     if not pool:
         pool.extend([
-            "유화 안정성 평가(입자크기·제타전위·저장안정성)",
-            "계면유변학(interfacial rheology) 기초",
-            "클린라벨 유화제 트렌드",
+            "식품 유화 시스템의 기본 원리",
+            "O/W emulsion과 W/O emulsion 차이",
+            "계면 안정성과 유화 안정성",
+            "유지 산화와 산패 관리",
+            "식용유 정제 공정의 이해",
         ])
-    return pool[:4]
+    return pool[:3]
 
 
 def generate_openai_summary(item: DigestItem, model: str, api_key: str) -> Tuple[str, str, str]:
@@ -350,24 +354,28 @@ def format_item(idx: int, item: DigestItem) -> str:
     icon = item_icon(item.category)
     tlabel = item_type_label(item.category)
     stars = score_to_stars(item.score)
-    bullets = make_three_bullets(item)
-    one_line_100 = to_100char_summary(item.extra.get("easy") or item.summary or item.title)
-    study_topics = recommend_study_topics(item)
+    bullets = make_three_line_summary(item)
+    one_line_100 = make_100_char_summary(item)
+    study_topics = make_study_topics(item)
     return (
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"[{idx}] 중요도: {stars} [{tlabel}]\n"
-        f"{icon} 제목: {item.title}\n"
-        f"🏛 출처: {item.source}\n"
-        f"📅 날짜: {date_str}\n\n"
-        f"📌 3줄 요약\n"
+        f"[{idx}] [{tlabel}]\n\n"
+        f"0. 중요도\n"
+        f"{stars}\n\n"
+        f"1. 논문명 또는 기사 제목\n"
+        f"{icon} {item.title}\n\n"
+        f"2. 해당 학회 및 기사 낸 곳\n"
+        f"🏛 {item.source}\n"
+        f"📅 {date_str}\n\n"
+        f"3. 3줄 요약\n"
         f"• {bullets[0]}\n"
         f"• {bullets[1]}\n"
         f"• {bullets[2]}\n\n"
-        f"📝 100자 요약\n"
+        f"4. 100자 요약\n"
         f"{one_line_100}\n\n"
-        f"📚 추가로 공부하면 좋을 것\n"
+        f"5. 관련 내용 엮어서 추가로 공부하면 좋을 것\n"
         + "".join(f"• {t}\n" for t in study_topics)
-        + f"\n🔗 링크: {item.link}\n"
+        + f"\n🔗 링크\n{item.link}\n"
         f"━━━━━━━━━━━━━━━━━━\n"
     )
 
