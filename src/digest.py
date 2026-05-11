@@ -389,7 +389,7 @@ def render_digest_message(items: List[DigestItem], lookback_hours: int, priority
                 top_keywords.append(kw)
     if not top_keywords:
         top_keywords = priority_keywords[:3]
-    keyline = ", ".join(top_keywords[:3])
+    keyline = ", ".join(top_keywords[:5])
     header = (
         "🧪 Food Emulsion & Lipid Processing Daily Digest\n"
         f"📅 {today_kst} | Morning Brief\n"
